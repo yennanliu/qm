@@ -11,7 +11,7 @@ import type {
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
-import type { ScopedConfigStore } from "../../resolution/config-store.ts";
+import type { OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { ManagedGroupDirectory } from "../../resolution/scope-membership.ts";
 import type { DirectoryStore } from "../../directory/directory-store.ts";
 import type { EnvironmentStore } from "../../environments/environment-store.ts";
@@ -44,6 +44,7 @@ import type { RunActivityStore } from "../../runs/run-activity-store.ts";
 import type { RunStore } from "../../runs/run-store.ts";
 import type { TaskStore } from "../../tasks/task-store.ts";
 import type { MemoryService } from "../../memory/memory-service.ts";
+import type { McpToolService } from "../../mcp/mcp-tool-service.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { DurableMap } from "../../persistence/durable-map.ts";
@@ -94,6 +95,7 @@ export interface OrchestratorDeps {
   identity: IdentityService;
   resolution: ResolutionService;
   config?: ScopedConfigStore;
+  brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
   sessionTapeMode?: "shadow" | "serve";
   sessions: SessionStore;
@@ -122,6 +124,7 @@ export interface OrchestratorDeps {
   acl: AclStore;
   admin?: AdminService;
   memory: MemoryService;
+  mcp?: McpToolService;
   memoryPolicy?: MemoryPolicy;
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
@@ -154,7 +157,7 @@ export interface OrchestratorDeps {
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;
   directory?: DirectoryStore;
-  managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion">;
+  managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
   reachExec?: boolean;
   eagerProvision?: boolean;
   environments?: EnvironmentStore;

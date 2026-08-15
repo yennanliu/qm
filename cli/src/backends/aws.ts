@@ -24,6 +24,7 @@ import { manifestRef } from "../manifest.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService, type ComputedSecret } from "../secrets.ts";
 import {
   brokerWiring,
+  brandEnvOf,
   orgEnv,
   runnableServices,
   serviceDef,
@@ -55,8 +56,32 @@ import {
   deploymentLayerBody,
   syncDeploymentLayerBody,
   type DeploymentLayerSyncResult,
+  httpDeploymentLayerTransport,
+  type DeploymentLayerTransport,
 } from "../deployment-layer.ts";
 
+/**
+ * Deployment-layer transport for AWS: signed HTTP to the public core URL,
+ * with a Secrets Manager fallback for CORE_SIGNING_SECRET and a 60s timeout.
+ */
+export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
+  secretFallback: (config) =>
+    config.aws
+      ? capture(process.env.AWS_BIN ?? "aws", [
+          "secretsmanager",
+          "get-secret-value",
+          "--secret-id",
+          `${config.aws.secretsPrefix}CORE_SIGNING_SECRET`,
+          "--query",
+          "SecretString",
+          "--output",
+          "text",
+          "--region",
+          config.aws.region,
+        ]).trim()
+      : undefined,
+  timeoutMs: 60_000,
+});
 export interface AwsUpOpts {
   dryRun?: boolean;
   yes?: boolean;
@@ -220,7 +245,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         }
       : {};
   const env: Record<string, string> = {
-    ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal")),
+    ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
     ...(service === "core" ? {} : { CORE_API_URL: coreUrl }),
     ...coreEnv,
     ...config.env[service],
@@ -287,7 +312,7 @@ function workloadEnvironment(config: QmConfig, workload: string): Record<string,
   return Object.fromEntries(
     Object.entries({
       CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080`,
-      ...orgEnv(workload, config.orgId, config.publicUrl, config.services.includes("portal")),
+      ...orgEnv(workload, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
       ...plugin?.env,
       PORT: "8080",
     }).sort(([a], [b]) => a.localeCompare(b)),
@@ -1727,7 +1752,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       if (current || before.counts.core !== 0) {
         const previousState = await currentDeploymentLayerState({
           config,
-          target: "aws",
+          transport: awsDeploymentLayerTransport,
           configDir: _configDir,
           ...(opts.envFile ? { envFile: opts.envFile } : {}),
         });
@@ -1753,7 +1778,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       if (!layerChanged) {
         const state = await currentDeploymentLayerState({
           config,
-          target: "aws",
+          transport: awsDeploymentLayerTransport,
           configDir: _configDir,
           ...(opts.envFile ? { envFile: opts.envFile } : {}),
         });
@@ -1825,7 +1850,12 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     if (desiredLayerBody) {
       layerAttempted = true;
       await syncAwsLayerAfterRoll(
-        { config, target: "aws", configDir: _configDir, ...(opts.envFile ? { envFile: opts.envFile } : {}) },
+        {
+          config,
+          transport: awsDeploymentLayerTransport,
+          configDir: _configDir,
+          ...(opts.envFile ? { envFile: opts.envFile } : {}),
+        },
         desiredLayerBody,
         desiredLayer!,
       );
@@ -1876,7 +1906,12 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     if (layerAttempted && previousLayerBody && !previousLayerBootstrapped) {
       try {
         await syncAwsLayerAfterRoll(
-          { config, target: "aws", configDir: _configDir, ...(opts.envFile ? { envFile: opts.envFile } : {}) },
+          {
+            config,
+            transport: awsDeploymentLayerTransport,
+            configDir: _configDir,
+            ...(opts.envFile ? { envFile: opts.envFile } : {}),
+          },
           previousLayerBody,
           createHash("sha256").update(previousLayerBody).digest("hex"),
         );
@@ -2069,7 +2104,7 @@ export async function awsRollback(
         await syncAwsLayerAfterRoll(
           {
             config,
-            target: "aws",
+            transport: awsDeploymentLayerTransport,
             configDir: layerOpts.configDir,
             ...(layerOpts.envFile ? { envFile: layerOpts.envFile } : {}),
           },
@@ -2096,7 +2131,7 @@ export async function awsRollback(
         await syncAwsLayerAfterRoll(
           {
             config,
-            target: "aws",
+            transport: awsDeploymentLayerTransport,
             configDir: layerOpts.configDir,
             ...(layerOpts.envFile ? { envFile: layerOpts.envFile } : {}),
           },
@@ -3206,7 +3241,7 @@ async function checkLive(
       await retryLiveProbe(async () => {
         const state = await currentDeploymentLayerState({
           config,
-          target: "aws",
+          transport: awsDeploymentLayerTransport,
           configDir,
           ...(opts.envFile ? { envFile: opts.envFile } : {}),
         });
@@ -3313,7 +3348,7 @@ export async function awsPinSandbox(
       await assertAwsPublicNetwork(config);
       const liveLayer = await currentDeploymentLayerState({
         config,
-        target: "aws",
+        transport: awsDeploymentLayerTransport,
         configDir: layerOpts.configDir,
         ...(layerOpts.envFile ? { envFile: layerOpts.envFile } : {}),
       });
@@ -3373,7 +3408,7 @@ export async function awsPinSandbox(
       await syncAwsLayerAfterRoll(
         {
           config,
-          target: "aws",
+          transport: awsDeploymentLayerTransport,
           configDir: layerOpts.configDir,
           ...(layerOpts.envFile ? { envFile: layerOpts.envFile } : {}),
         },
@@ -3408,7 +3443,7 @@ export async function awsPinSandbox(
         await syncAwsLayerAfterRoll(
           {
             config,
-            target: "aws",
+            transport: awsDeploymentLayerTransport,
             configDir: layerOpts.configDir,
             ...(layerOpts.envFile ? { envFile: layerOpts.envFile } : {}),
           },
