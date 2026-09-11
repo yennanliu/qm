@@ -1,3 +1,4 @@
+import { coreRememberedSessions } from "./sessions.ts";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { json } from "../../chassis/src/http.ts";
@@ -22,9 +23,10 @@ export function bootChecks(): void {
   throw new Error(`auth broker refusing to start: ${problems.length} misconfiguration(s)`);
 }
 
-export async function startServer(): Promise<void> {
+export async function startServer(options: { port?: number; host?: string } = {}): Promise<import("node:http").Server> {
   bootChecks();
   const signingKey = await loadSigningKey(CFG.signingJwk!);
+  const mailer = mailerFor(CFG);
   const branding = createBrandingCache(async () => {
     const path = withSourceAuthNonce("/v1/surface-config", CFG.coreSigningSecret);
     const r = await fetch(`${CFG.coreApiUrl}${path}`, {
@@ -39,8 +41,9 @@ export async function startServer(): Promise<void> {
     cfg: CFG,
     signingKey,
     signer: new TokenSigner(CFG.tokenSecret, CFG.issuer),
+    sessions: coreRememberedSessions(CFG.coreApiUrl, CFG.coreSigningSecret),
     claims: coreClaimStore(CFG.coreApiUrl, CFG.coreSigningSecret, "auth"),
-    mailer: mailerFor(CFG),
+    mailer,
     brandName: () => {
       void branding.forRender();
       return branding.current().selfLabel || CFG.brandName;
@@ -53,15 +56,21 @@ export async function startServer(): Promise<void> {
       else res.end();
     });
   });
-  server.listen(PORT, () => {
-    console.log(
-      `[auth] sign-in broker on http://localhost:${PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${CFG.transport} email)`,
-    );
-    if (!CFG.coreSigningSecret)
-      console.warn(
-        "[auth] CORE_SIGNING_SECRET unset — core will reject the single-use claims that make links and codes one-shot",
-      );
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(options.port ?? PORT, options.host, () => {
+      server.off("error", reject);
+      resolve();
+    });
   });
+  console.log(
+    `[auth] sign-in broker on http://${options.host ?? "localhost"}:${options.port ?? PORT} (issuer ${CFG.issuer}, key ${signingKey.kid}, ${mailer ? `${CFG.transport} email` : "email not configured"})`,
+  );
+  if (!CFG.coreSigningSecret)
+    console.warn(
+      "[auth] CORE_SIGNING_SECRET unset, so core will reject the single-use claims that make links and codes one-shot",
+    );
+  return server;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
